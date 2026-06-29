@@ -1,14 +1,14 @@
 num = int(input("Enter a number: ") )
 if num < 0:
-    text = "The number is negative"
+    text = f"{num} is negative"
 elif num > 0:
-    text = "The number is positive"
+    text = f"{num} is positive"
 else:
-    text = "The number is zero"
+    text = f"{num} is zero"
 
 if num == 0:
-    print(f"{text}.")
+    print("1")
 elif num % 2 == 0:
-    print(f"{text} and even number.")
-else :
-    print(f"{text} and odd number.")
+    print("2")
+else:
+    print("3")
