@@ -1,1 +1,1 @@
-# 673380xxx-x_sec1_script_programming
+# ตัวอย่างสำหรับวิชาสคริป สามารถclone repo ไปใช้ได้ครับ
