@@ -128,7 +128,6 @@ agentic-web-scraper/
 bash
 python --version
 
-Copy
 
 ถ้ายังไม่มี ให้ไปโหลดที่ python.org (แนะนำเวอร์ชัน 3.10+)
 
@@ -186,6 +185,11 @@ source venv/bin/activate
 
 
 เมื่อ activate สำเร็จ จะเห็น (venv) นำหน้าที่ prompt
+
+ติดตั้ง Dependencies ที่จำเป็น:
+bash
+pip install selenium webdriver-manager
+
 
 เลือก Python Interpreter ให้ VS Code รู้จัก venv:
 
@@ -271,3 +275,293 @@ python test_setup.py
 
 
 ถ้าเห็น Chrome เปิดขึ้นมา, ไปที่เว็บ, แล้ว print ชื่อหน้าเว็บออกมาใน Terminal = Setup สำเร็จ! 🎉
+
+
+โค้ดในแต่ละไฟล์ (สามารถก็อปไปวางได้เลย)
+1. src/data_models.py
+ไฟล์นี้ใช้สำหรับกำหนดโครงสร้างข้อมูลสินค้าที่จะจัดเก็บด้วย @dataclass
+
+python
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class Product:
+    name: str
+    price: str
+    description: Optional[str] = None
+    url: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+
+2. src/driver_manager.py
+จัดการการเปิด-ปิด Selenium WebDriver รองรับทั้ง Chrome และ Firefox รวมถึงการตั้งค่า Headless Mode
+
+python
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.firefox.service import Service as FirefoxService
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.firefox import GeckoDriverManager
+
+class DriverManager:
+    def __init__(self, browser_type: str = "chrome", headless: bool = True):
+        self.browser_type = browser_type.lower()
+        self.headless = headless
+        self.driver = None
+
+    def get_driver(self):
+        if self.browser_type == "chrome":
+            options = webdriver.ChromeOptions()
+            if self.headless:
+                options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            
+            service = ChromeService(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=options)
+
+        elif self.browser_type == "firefox":
+            options = webdriver.FirefoxOptions()
+            if self.headless:
+                options.add_argument("--headless")
+            
+            service = FirefoxService(GeckoDriverManager().install())
+            self.driver = webdriver.Firefox(service=service, options=options)
+
+        else:
+            raise ValueError(f"Unsupported browser type: {self.browser_type}")
+
+        self.driver.implicitly_wait(10)
+        return self.driver
+
+    def close_driver(self):
+        if self.driver:
+            self.driver.quit()
+
+
+
+3. src/config_parser.py
+ทำหน้าที่โหลดไฟล์คอนฟิก JSON และตรวจสอบว่ามี Key ที่จำเป็นครบถ้วนหรือไม่
+
+python
+import json
+import os
+
+class ConfigParser:
+    REQUIRED_KEYS = [
+        "start_url",
+        "max_pages",
+        "delay_between_pages",
+        "item_container_selector",
+        "item_data_selectors"
+    ]
+
+    def __init__(self, config_path: str):
+        self.config_path = config_path
+
+    def load_config(self) -> dict:
+        if not os.path.exists(self.config_path):
+            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        self._validate_config(config)
+        return config
+
+    def _validate_config(self, config: dict):
+        for key in self.REQUIRED_KEYS:
+            if key not in config:
+                raise KeyError(f"Missing required configuration key: '{key}'")
+
+
+
+4. src/utils.py
+ฟังก์ชันช่วยเหลือในการบันทึกข้อมูล และการรอ/คลิก Element อย่างปลอดภัย
+
+python
+import json
+import os
+import time
+from typing import List, Dict, Any
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+def save_data_to_json(data: List[Dict[str, Any]], filepath: str):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def wait_for_element(driver, selector: str, timeout: int = 10, by: By = By.CSS_SELECTOR):
+    return WebDriverWait(driver, timeout).until(
+        EC.presence_of_element_located((by, selector))
+    )
+
+def safe_click(driver, element):
+    driver.execute_script("arguments[0].scrollIntoView(true);", element)
+    time.sleep(0.5)
+    element.click()
+
+
+5. src/scraper_agent.py
+ส่วนควบคุมหลักในการดึงข้อมูล และการเปลี่ยนหน้า (Pagination)
+
+python
+import time
+from dataclasses import asdict
+from selenium.webdriver.common.by import By
+from src.driver_manager import DriverManager
+from src.data_models import Product
+from src.utils import safe_click
+
+class ScraperAgent:
+    def __init__(self, config: dict, browser: str = "chrome", headless: bool = True):
+        self.config = config
+        self.driver_manager = DriverManager(browser_type=browser, headless=headless)
+        self.driver = self.driver_manager.get_driver()
+
+    def run(self) -> list:
+        results = []
+        try:
+            self.driver.get(self.config["start_url"])
+            current_page = 1
+
+            while current_page <= self.config["max_pages"]:
+                print(f"Scraping page {current_page}...")
+                time.sleep(self.config["delay_between_pages"])
+
+                items = self.driver.find_elements(By.CSS_SELECTOR, self.config["item_container_selector"])
+                for item in items:
+                    product_data = self._parse_item(item)
+                    results.append(asdict(product_data))
+
+                # Handle Pagination
+                pagination_selector = self.config.get("pagination_selector")
+                if pagination_selector and current_page < self.config["max_pages"]:
+                    next_buttons = self.driver.find_elements(By.CSS_SELECTOR, pagination_selector)
+                    if next_buttons:
+                        safe_click(self.driver, next_buttons[0])
+                        current_page += 1
+                    else:
+                        print("No next page button found. Stopping.")
+                        break
+                else:
+                    break
+
+        finally:
+            self.driver_manager.close_driver()
+
+        return results
+
+    def _parse_item(self, item) -> Product:
+        selectors = self.config["item_data_selectors"]
+        
+        def get_text(selector):
+            if not selector: return None
+            try:
+                return item.find_element(By.CSS_SELECTOR, selector).text.strip()
+            except:
+                return None
+
+        def get_attr(selector, attr):
+            if not selector: return None
+            try:
+                return item.find_element(By.CSS_SELECTOR, selector).get_attribute(attr)
+            except:
+                return None
+
+        return Product(
+            name=get_text(selectors.get("name")),
+            price=get_text(selectors.get("price")),
+            description=get_text(selectors.get("description")),
+            url=get_attr(selectors.get("url"), "href"),
+            image_url=get_attr(selectors.get("image_url"), "src")
+        )
+
+
+
+6. configs/example_site_config.json
+ไฟล์คอนฟิกสำหรับทดสอบกับเว็บ books.toscrape.com (สร้างไฟล์นี้ไว้ในโฟลเดอร์ configs/)
+
+json
+{
+  "start_url": "https://books.toscrape.com/catalogue/category/books_1/index.html",
+  "max_pages": 2,
+  "delay_between_pages": 1,
+  "item_container_selector": "article.product_pod",
+  "pagination_selector": "li.next a",
+  "item_data_selectors": {
+    "name": "h3 a",
+    "price": "p.price_color",
+    "description": null,
+    "url": "h3 a",
+    "image_url": "div.image_container a img"
+  }
+}
+
+
+
+7. main.py
+ไฟล์หลักในการเรียกใช้งานระบบ
+
+python
+import os
+from src.config_parser import ConfigParser
+from src.scraper_agent import ScraperAgent
+from src.utils import save_data_to_json
+
+def main():
+    config_path = os.path.join("configs", "example_site_config.json")
+    output_path = os.path.join("data", "scraped_products.json")
+
+    # 1. Load and parse config
+    parser = ConfigParser(config_path)
+    config = parser.load_config()
+
+    # 2. Initialize and run scraper agent
+    # ปรับ headless=False หากต้องการเปิดเบราว์เซอร์ดูการทำงานจริง
+    agent = ScraperAgent(config=config, browser="chrome", headless=True)
+    results = agent.run()
+
+    # 3. Save results
+    save_data_to_json(results, output_path)
+    print(f"Successfully scraped {len(results)} items and saved to {output_path}")
+
+if __name__ == "__main__":
+    main()
+
+
+
+เมื่อสร้างไฟล์และวางโค้ดครบแล้ว สามารถทดสอบรันใน Terminal ด้วยคำสั่ง:
+
+bash
+python main.py
+
+การติดตั้ง Libraries ที่จำเป็น: รันคำสั่งนี้ใน Terminal เพื่อตรวจสอบว่าติดตั้ง Package ครบถ้วนแล้วหรือไม่:
+
+bash
+pip install selenium webdriver-manager
+
+
+ขั้นตอนการทดสอบรันระบบ (Final Testing)
+ให้ทดสอบรันโปรแกรมผ่าน Terminal ด้วยคำสั่ง:
+
+bash
+python main.py
+
+
+ผลลัพธ์ที่ควรจะเกิดขึ้น:
+
+Terminal แสดงข้อความการทำงาน เช่น:
+text
+Scraping page 1...
+Scraping page 2...
+Successfully scraped 40 items and saved to data/scraped_products.json
+
+
+
+มีไฟล์ scraped_products.json ถูกสร้างขึ้นภายในโฟลเดอร์ data/ ซึ่งบรรจุข้อมูลหนังสือ เช่น ชื่อ, ราคา, URL รูปภาพ ฯลฯ
