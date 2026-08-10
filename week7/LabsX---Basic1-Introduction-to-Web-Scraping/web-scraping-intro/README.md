@@ -59,7 +59,7 @@ cd web-scraping-intro
 ```
 
 **2. สร้าง Virtual Environment **
-## (ห้ามข้ามเด็ดขาด)
+## (ข้อ 2 ห้ามข้ามเด็ดขาด)
 การใช้ virtual environment ช่วยแยก dependencies ของโปรเจกต์นี้ออกจากโปรเจกต์อื่นในเครื่อง
 
 * **Windows (PowerShell):**
